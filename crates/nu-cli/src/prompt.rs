@@ -1,8 +1,8 @@
 #[cfg(windows)]
 use nu_utils::enable_vt_processing;
 use reedline::{
-    DefaultPrompt, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus,
-    PromptViMode,
+    DefaultPrompt, HelixMode, Prompt, PromptEditMode, PromptHistorySearch,
+    PromptHistorySearchStatus, PromptViMode,
 };
 use std::borrow::Cow;
 
@@ -126,10 +126,12 @@ impl Prompt for NushellPrompt {
                 PromptViMode::Insert => self.vi_insert_prompt_indicator.as_deref().unwrap_or(": "),
                 PromptViMode::Visual => self.vi_normal_prompt_indicator.as_deref().unwrap_or("v "),
             },
-            // Helix reports its modes via PromptViMode (Normal covers normal+select).
+            // Helix normal and select share the normal indicator; insert uses insert.
             PromptEditMode::Helix(helix_mode) => match helix_mode {
-                PromptViMode::Normal => self.vi_normal_prompt_indicator.as_deref().unwrap_or("> "),
-                PromptViMode::Insert => self.vi_insert_prompt_indicator.as_deref().unwrap_or(": "),
+                HelixMode::Normal | HelixMode::Select => {
+                    self.vi_normal_prompt_indicator.as_deref().unwrap_or("> ")
+                }
+                HelixMode::Insert => self.vi_insert_prompt_indicator.as_deref().unwrap_or(": "),
             },
             PromptEditMode::Custom(str) => &self.default_wrapped_custom_string(str),
         };

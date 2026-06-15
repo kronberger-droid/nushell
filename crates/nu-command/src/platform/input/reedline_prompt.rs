@@ -1,5 +1,5 @@
 use reedline::{
-    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode,
+    HelixMode, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode,
 };
 
 use std::borrow::Cow;
@@ -38,8 +38,8 @@ impl Prompt for ReedlinePrompt {
                 PromptViMode::Visual => DEFAULT_VI_NORMAL_PROMPT_INDICATOR.into(),
             },
             PromptEditMode::Helix(helix_mode) => match helix_mode {
-                PromptViMode::Normal => DEFAULT_VI_NORMAL_PROMPT_INDICATOR.into(),
-                PromptViMode::Insert => DEFAULT_VI_INSERT_PROMPT_INDICATOR.into(),
+                HelixMode::Normal | HelixMode::Select => DEFAULT_VI_NORMAL_PROMPT_INDICATOR.into(),
+                HelixMode::Insert => DEFAULT_VI_INSERT_PROMPT_INDICATOR.into(),
             },
             PromptEditMode::Custom(str) => format!("({str})").into(),
         }

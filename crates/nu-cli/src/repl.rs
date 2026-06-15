@@ -579,6 +579,9 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         vi_insert: map_nucursorshape_to_cursorshape(config.cursor_shape.vi_insert),
         vi_normal: map_nucursorshape_to_cursorshape(config.cursor_shape.vi_normal),
         emacs: map_nucursorshape_to_cursorshape(config.cursor_shape.emacs),
+        helix_normal: map_nucursorshape_to_cursorshape(config.cursor_shape.helix_normal),
+        helix_select: map_nucursorshape_to_cursorshape(config.cursor_shape.helix_select),
+        helix_insert: map_nucursorshape_to_cursorshape(config.cursor_shape.helix_insert),
     };
     perf!("get config/cursor config", start_time, use_color);
 
