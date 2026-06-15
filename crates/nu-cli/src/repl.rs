@@ -38,7 +38,7 @@ use nu_utils::{
 #[cfg(feature = "sqlite")]
 use reedline::SqliteBackedHistory;
 use reedline::{
-    CursorConfig, CwdAwareHinter, DefaultCompleter, EditCommand, Emacs, FileBackedHistory,
+    CursorConfig, CwdAwareHinter, DefaultCompleter, EditCommand, Emacs, FileBackedHistory, Helix,
     HistorySessionId, MouseClickMode, Osc133ClickEventsMarkers, Osc633Markers, Reedline,
     SemanticPromptMarkers, Vi,
 };
@@ -1303,6 +1303,10 @@ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedl
                 normal_keybindings,
             } => {
                 let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
+                line_editor.with_edit_mode(edit_mode)
+            }
+            KeybindingsMode::Helix => {
+                let edit_mode = Box::new(Helix::default());
                 line_editor.with_edit_mode(edit_mode)
             }
         },
