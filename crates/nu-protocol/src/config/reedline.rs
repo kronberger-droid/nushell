@@ -73,6 +73,9 @@ pub struct CursorShapeConfig {
     pub emacs: NuCursorShape,
     pub vi_insert: NuCursorShape,
     pub vi_normal: NuCursorShape,
+    pub helix_normal: NuCursorShape,
+    pub helix_select: NuCursorShape,
+    pub helix_insert: NuCursorShape,
 }
 
 impl UpdateFromValue for CursorShapeConfig {
@@ -93,6 +96,9 @@ impl UpdateFromValue for CursorShapeConfig {
                 "vi_insert" => self.vi_insert.update(val, path, errors),
                 "vi_normal" => self.vi_normal.update(val, path, errors),
                 "emacs" => self.emacs.update(val, path, errors),
+                "helix_normal" => self.helix_normal.update(val, path, errors),
+                "helix_select" => self.helix_select.update(val, path, errors),
+                "helix_insert" => self.helix_insert.update(val, path, errors),
                 _ => errors.unknown_option(path, val),
             }
         }
