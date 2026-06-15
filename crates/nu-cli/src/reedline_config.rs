@@ -17,6 +17,7 @@ use reedline::{
     MenuBuilder, MotionTarget, OutputMode, PromptEditModeDiscriminants, Reedline, ReedlineEvent,
     ReedlineEventDiscriminants, ReedlineMenu, TextObject, TextObjectScope, TextObjectType,
     TraversalDirection, WordEdge, WordKind, default_emacs_keybindings,
+    default_helix_insert_keybindings, default_helix_normal_keybindings,
     default_vi_insert_keybindings, default_vi_normal_keybindings,
 };
 use std::{str::FromStr, sync::Arc};
@@ -811,7 +812,10 @@ pub enum KeybindingsMode {
         insert_keybindings: Keybindings,
         normal_keybindings: Keybindings,
     },
-    Helix,
+    Helix {
+        insert_keybindings: Keybindings,
+        normal_keybindings: Keybindings,
+    },
 }
 
 pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, ShellError> {
@@ -820,6 +824,8 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
     let mut emacs_keybindings = default_emacs_keybindings();
     let mut insert_keybindings = default_vi_insert_keybindings();
     let mut normal_keybindings = default_vi_normal_keybindings();
+    let mut helix_insert_keybindings = default_helix_insert_keybindings();
+    let mut helix_normal_keybindings = default_helix_normal_keybindings();
 
     match config.edit_mode {
         EditBindings::Emacs => {
@@ -829,7 +835,10 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
             add_menu_keybindings(&mut insert_keybindings);
             add_menu_keybindings(&mut normal_keybindings);
         }
-        EditBindings::Helix => {}
+        EditBindings::Helix => {
+            add_menu_keybindings(&mut helix_insert_keybindings);
+            add_menu_keybindings(&mut helix_normal_keybindings);
+        }
     }
     for keybinding in parsed_keybindings {
         add_keybinding(
@@ -839,6 +848,8 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
             &mut emacs_keybindings,
             &mut insert_keybindings,
             &mut normal_keybindings,
+            &mut helix_insert_keybindings,
+            &mut helix_normal_keybindings,
         )?
     }
 
@@ -848,7 +859,10 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
             insert_keybindings,
             normal_keybindings,
         }),
-        EditBindings::Helix => Ok(KeybindingsMode::Helix),
+        EditBindings::Helix => Ok(KeybindingsMode::Helix {
+            insert_keybindings: helix_insert_keybindings,
+            normal_keybindings: helix_normal_keybindings,
+        }),
     }
 }
 
@@ -859,6 +873,8 @@ fn add_keybinding(
     emacs_keybindings: &mut Keybindings,
     insert_keybindings: &mut Keybindings,
     normal_keybindings: &mut Keybindings,
+    helix_insert_keybindings: &mut Keybindings,
+    helix_normal_keybindings: &mut Keybindings,
 ) -> Result<(), ShellError> {
     use PromptEditModeDiscriminants as PEMD;
     let span = mode.span();
@@ -868,15 +884,18 @@ fn add_keybinding(
             Ok(PEMD::Emacs) => add_parsed_keybinding(emacs_keybindings, keybinding, config),
             Ok(PEMD::ViInsert) => add_parsed_keybinding(insert_keybindings, keybinding, config),
             Ok(PEMD::ViNormal) => add_parsed_keybinding(normal_keybindings, keybinding, config),
-            // Helix mode uses reedline's built-in keybindings (Helix::default),
-            // so it isn't a target for nushell keybinding records.
-            Ok(PEMD::Default | PEMD::Custom | PEMD::HelixNormal | PEMD::HelixInsert) | Err(_) => {
-                Err(ShellError::InvalidValue {
-                    valid: "'emacs', 'vi_insert', or 'vi_normal'".into(),
-                    actual: format!("'{val}'"),
-                    span,
-                })
+            Ok(PEMD::HelixInsert) => {
+                add_parsed_keybinding(helix_insert_keybindings, keybinding, config)
             }
+            Ok(PEMD::HelixNormal) => {
+                add_parsed_keybinding(helix_normal_keybindings, keybinding, config)
+            }
+            Ok(PEMD::Default | PEMD::Custom) | Err(_) => Err(ShellError::InvalidValue {
+                valid: "'emacs', 'vi_insert', 'vi_normal', 'helix_insert', or 'helix_normal'"
+                    .into(),
+                actual: format!("'{val}'"),
+                span,
+            }),
         },
         Value::List { vals, .. } => {
             for inner_mode in vals {
@@ -887,6 +906,8 @@ fn add_keybinding(
                     emacs_keybindings,
                     insert_keybindings,
                     normal_keybindings,
+                    helix_insert_keybindings,
+                    helix_normal_keybindings,
                 )?
             }
 
@@ -906,10 +927,9 @@ pub(crate) fn display_edit_mode(mode: PromptEditModeDiscriminants) -> Option<Str
         PromptEditModeDiscriminants::Emacs => Some("emacs".into()),
         PromptEditModeDiscriminants::ViNormal => Some("vi_normal".into()),
         PromptEditModeDiscriminants::ViInsert => Some("vi_insert".into()),
-        PromptEditModeDiscriminants::Default
-        | PromptEditModeDiscriminants::Custom
-        | PromptEditModeDiscriminants::HelixNormal
-        | PromptEditModeDiscriminants::HelixInsert => None,
+        PromptEditModeDiscriminants::HelixNormal => Some("helix_normal".into()),
+        PromptEditModeDiscriminants::HelixInsert => Some("helix_insert".into()),
+        PromptEditModeDiscriminants::Default | PromptEditModeDiscriminants::Custom => None,
     }
 }
 
