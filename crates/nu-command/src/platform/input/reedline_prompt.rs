@@ -36,6 +36,10 @@ impl Prompt for ReedlinePrompt {
                 PromptViMode::Normal => DEFAULT_VI_NORMAL_PROMPT_INDICATOR.into(),
                 PromptViMode::Insert => DEFAULT_VI_INSERT_PROMPT_INDICATOR.into(),
             },
+            PromptEditMode::Helix(helix_mode) => match helix_mode {
+                PromptViMode::Normal => DEFAULT_VI_NORMAL_PROMPT_INDICATOR.into(),
+                PromptViMode::Insert => DEFAULT_VI_INSERT_PROMPT_INDICATOR.into(),
+            },
             PromptEditMode::Custom(str) => format!("({str})").into(),
         }
     }

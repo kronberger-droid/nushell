@@ -713,6 +713,7 @@ pub enum KeybindingsMode {
         insert_keybindings: Keybindings,
         normal_keybindings: Keybindings,
     },
+    Helix,
 }
 
 pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, ShellError> {
@@ -730,6 +731,7 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
             add_menu_keybindings(&mut insert_keybindings);
             add_menu_keybindings(&mut normal_keybindings);
         }
+        EditBindings::Helix => {}
     }
     for keybinding in parsed_keybindings {
         add_keybinding(
@@ -748,6 +750,7 @@ pub(crate) fn create_keybindings(config: &Config) -> Result<KeybindingsMode, She
             insert_keybindings,
             normal_keybindings,
         }),
+        EditBindings::Helix => Ok(KeybindingsMode::Helix),
     }
 }
 
@@ -767,11 +770,15 @@ fn add_keybinding(
             Ok(PEMD::Emacs) => add_parsed_keybinding(emacs_keybindings, keybinding, config),
             Ok(PEMD::ViInsert) => add_parsed_keybinding(insert_keybindings, keybinding, config),
             Ok(PEMD::ViNormal) => add_parsed_keybinding(normal_keybindings, keybinding, config),
-            Ok(PEMD::Default | PEMD::Custom) | Err(_) => Err(ShellError::InvalidValue {
-                valid: "'emacs', 'vi_insert', or 'vi_normal'".into(),
-                actual: format!("'{val}'"),
-                span,
-            }),
+            // Helix mode uses reedline's built-in keybindings (Helix::default),
+            // so it isn't a target for nushell keybinding records.
+            Ok(PEMD::Default | PEMD::Custom | PEMD::HelixNormal | PEMD::HelixInsert) | Err(_) => {
+                Err(ShellError::InvalidValue {
+                    valid: "'emacs', 'vi_insert', or 'vi_normal'".into(),
+                    actual: format!("'{val}'"),
+                    span,
+                })
+            }
         },
         Value::List { vals, .. } => {
             for inner_mode in vals {
@@ -801,7 +808,10 @@ pub(crate) fn display_edit_mode(mode: PromptEditModeDiscriminants) -> Option<Str
         PromptEditModeDiscriminants::Emacs => Some("emacs".into()),
         PromptEditModeDiscriminants::ViNormal => Some("vi_normal".into()),
         PromptEditModeDiscriminants::ViInsert => Some("vi_insert".into()),
-        PromptEditModeDiscriminants::Default | PromptEditModeDiscriminants::Custom => None,
+        PromptEditModeDiscriminants::Default
+        | PromptEditModeDiscriminants::Custom
+        | PromptEditModeDiscriminants::HelixNormal
+        | PromptEditModeDiscriminants::HelixInsert => None,
     }
 }
 
@@ -1437,8 +1447,9 @@ fn edit_from_record(
             granularity: parse_granularity(record, config, span)?,
         },
         // `EditCommand::ReplaceChars` - Internal hack not sanely implementable as a
-        // standalone binding
-        Ok(ECD::ReplaceChars) | Err(_) => {
+        // standalone binding. Select/CopyChar/CollapseSelection are helix-internal
+        // commands driven by reedline's own helix keybindings, not bindable here.
+        Ok(ECD::ReplaceChars | ECD::Select | ECD::CopyChar | ECD::CollapseSelection) | Err(_) => {
             return Err(ShellError::InvalidValue {
                 valid: "a reedline EditCommand".into(),
                 actual: format!("'{name}'"),
@@ -1573,7 +1584,10 @@ pub(crate) fn display_edit_command(edit: EditCommandDiscriminants) -> Option<&'s
         ECD::Change => {
             "Change motion: <string>, direction: <string>, word_kind?: <string>, edge?: <string>, char?: <char>, stop?: <string>, granularity?: <string>"
         }
-        ECD::ReplaceChars => return None,
+        ECD::ReplaceChars
+        | ECD::Select
+        | ECD::CopyChar
+        | ECD::CollapseSelection => return None,
     })
 }
 

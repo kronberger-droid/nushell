@@ -97,6 +97,7 @@ pub enum EditBindings {
     Vi,
     #[default]
     Emacs,
+    Helix,
 }
 
 impl FromStr for EditBindings {
@@ -106,7 +107,8 @@ impl FromStr for EditBindings {
         match s.to_ascii_lowercase().as_str() {
             "vi" => Ok(Self::Vi),
             "emacs" => Ok(Self::Emacs),
-            _ => Err("'emacs' or 'vi'"),
+            "helix" => Ok(Self::Helix),
+            _ => Err("'emacs', 'vi' or 'helix'"),
         }
     }
 }

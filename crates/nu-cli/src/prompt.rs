@@ -125,6 +125,11 @@ impl Prompt for NushellPrompt {
                 PromptViMode::Normal => self.vi_normal_prompt_indicator.as_deref().unwrap_or("> "),
                 PromptViMode::Insert => self.vi_insert_prompt_indicator.as_deref().unwrap_or(": "),
             },
+            // Helix reports its modes via PromptViMode (Normal covers normal+select).
+            PromptEditMode::Helix(helix_mode) => match helix_mode {
+                PromptViMode::Normal => self.vi_normal_prompt_indicator.as_deref().unwrap_or("> "),
+                PromptViMode::Insert => self.vi_insert_prompt_indicator.as_deref().unwrap_or(": "),
+            },
             PromptEditMode::Custom(str) => &self.default_wrapped_custom_string(str),
         };
 
