@@ -1305,8 +1305,11 @@ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedl
                 let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
                 line_editor.with_edit_mode(edit_mode)
             }
-            KeybindingsMode::Helix => {
-                let edit_mode = Box::new(Helix::default());
+            KeybindingsMode::Helix {
+                insert_keybindings,
+                normal_keybindings,
+            } => {
+                let edit_mode = Box::new(Helix::new(insert_keybindings, normal_keybindings));
                 line_editor.with_edit_mode(edit_mode)
             }
         },
