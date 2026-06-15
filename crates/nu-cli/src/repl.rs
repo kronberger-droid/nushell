@@ -18,7 +18,7 @@ use crossterm::cursor::SetCursorStyle;
 use log::{error, trace, warn};
 use miette::{ErrReport, IntoDiagnostic, Result};
 use nu_cmd_base::util::get_editor;
-use nu_color_config::StyleComputer;
+use nu_color_config::{StyleComputer, get_color_map};
 use nu_engine::env_to_strings;
 use nu_engine::exit::cleanup_exit;
 use nu_parser::{lex, parse, trim_quotes_str};
@@ -622,10 +622,17 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         ))
         .with_cursor_config(cursor_config)
         .with_abbreviations(config.abbreviations.clone())
-        .with_visual_selection_style(nu_ansi_term::Style {
-            is_reverse: true,
-            ..Default::default()
-        })
+        // Visual/select highlight: use `$env.config.color_config.selection` if
+        // set (e.g. `{ bg: dark_gray }`), else fall back to reverse video.
+        .with_visual_selection_style(
+            get_color_map(&config.color_config)
+                .get("selection")
+                .copied()
+                .unwrap_or(nu_ansi_term::Style {
+                    is_reverse: true,
+                    ..Default::default()
+                }),
+        )
         .with_semantic_markers(semantic_markers_from_config(
             &config,
             term_program_is_vscode,
