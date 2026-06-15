@@ -788,7 +788,9 @@ fn add_keybinding(
             Ok(PEMD::HelixInsert) => {
                 add_parsed_keybinding(helix_insert_keybindings, keybinding, config)
             }
-            Ok(PEMD::HelixNormal) => {
+            // reedline's Helix shares one keybinding set between normal and
+            // select, so `helix_select` bindings land in the normal set.
+            Ok(PEMD::HelixNormal | PEMD::HelixSelect) => {
                 add_parsed_keybinding(helix_normal_keybindings, keybinding, config)
             }
             Ok(PEMD::Default | PEMD::Custom) | Err(_) => Err(ShellError::InvalidValue {
@@ -829,6 +831,7 @@ pub(crate) fn display_edit_mode(mode: PromptEditModeDiscriminants) -> Option<Str
         PromptEditModeDiscriminants::ViNormal => Some("vi_normal".into()),
         PromptEditModeDiscriminants::ViInsert => Some("vi_insert".into()),
         PromptEditModeDiscriminants::HelixNormal => Some("helix_normal".into()),
+        PromptEditModeDiscriminants::HelixSelect => Some("helix_select".into()),
         PromptEditModeDiscriminants::HelixInsert => Some("helix_insert".into()),
         PromptEditModeDiscriminants::Default | PromptEditModeDiscriminants::Custom => None,
     }
