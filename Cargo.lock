@@ -7287,7 +7287,7 @@ dependencies = [
 [[package]]
 name = "reedline"
 version = "0.48.0"
-source = "git+https://github.com/kronberger-droid/reedline?branch=helix-mode-wip#e725314b8d637e48dd7fa6c72826fa63f5045352"
+source = "git+https://github.com/kronberger-droid/reedline?branch=helix-cursor-backend#4d2d41a00d23f60fa8ba9b834156e41cd538b0c9"
 dependencies = [
  "arboard",
  "chrono",
