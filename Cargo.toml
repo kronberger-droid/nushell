@@ -451,6 +451,14 @@ system-clipboard = [
   "nu-cli/system-clipboard",
 ]
 
+# Experimental Helix/Kakoune-style edit mode from `reedline` (`$env.config.edit_mode = "helix"`).
+# Opt-in while the implementation stabilizes.
+helix = [
+  "nu-cli/helix",
+  "nu-command/helix",
+  "reedline/helix",
+]
+
 # Stable (Default)
 trash-support = ["nu-command/trash-support"]
 
@@ -491,7 +499,9 @@ bench = false
 # To use a development version of a dependency please use a global override here
 # changing versions in each sub-crate of the workspace is tedious
 [patch.crates-io]
-reedline = { git = "https://github.com/nushell/reedline", branch = "main" }
+# Temporarily the kronberger-droid fork while the helix edit mode (reedline#1138)
+# is upstreamed; the `helix` feature above only compiles against this branch.
+reedline = { git = "https://github.com/kronberger-droid/reedline", branch = "helix-mode" }
 # nu-ansi-term = { git = "https://github.com/nushell/nu-ansi-term.git", branch = "main" }
 
 # Run all benchmarks with `cargo bench`
