@@ -7605,7 +7605,7 @@ dependencies = [
 [[package]]
 name = "reedline"
 version = "0.49.0"
-source = "git+https://github.com/nushell/reedline?branch=main#f9651ceecc688c0d49ea0a209b7c463e10e4fcc7"
+source = "git+https://github.com/kronberger-droid/reedline?branch=fix%2Flarge-buffer-prompt-newline#b3a6f8bf38d51db50da8c8579c2adaa9e66b3511"
 dependencies = [
  "arboard",
  "chrono",

@@ -504,7 +504,9 @@ bench = false
 # To use a development version of a dependency please use a global override here
 # changing versions in each sub-crate of the workspace is tedious
 [patch.crates-io]
-reedline = { git = "https://github.com/nushell/reedline", branch = "main" }
+# Upstream main plus the large-buffer prompt-newline fix. Point back at
+# `nushell/reedline` branch `main` once it lands there.
+reedline = { git = "https://github.com/kronberger-droid/reedline", branch = "fix/large-buffer-prompt-newline" }
 # nu-ansi-term = { git = "https://github.com/nushell/nu-ansi-term.git", branch = "main" }
 
 # Run all benchmarks with `cargo bench`
