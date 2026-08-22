@@ -248,6 +248,9 @@ If you create a custom command with this name, that will be used instead."
             None
         };
 
+        // MCP servers and background completions must not reach the terminal.
+        let detach = engine_state.is_mcp || stack.suppress_stdin;
+
         // Configure stdin. We'll try connecting input to the child process
         // directly. If that's not possible, we'll set up a pipe and spawn a
         // thread to copy data into the child process.
@@ -264,9 +267,8 @@ If you create a custom command with this name, that will be used instead."
             },
             PipelineData::Empty => {
                 // MCP and background completions must not inherit the live terminal.
-                if engine_state.is_mcp || stack.suppress_stdin {
+                if detach {
                     command.stdin(Stdio::null());
-                    prepare_background_command(&mut command);
                 } else {
                     command.stdin(Stdio::inherit());
                 }
@@ -277,6 +279,14 @@ If you create a custom command with this name, that will be used instead."
                 Some(value)
             }
         };
+
+        // Detach regardless of how stdin was wired up: a child fed through a pipe can still
+        // open `/dev/tty` (fzf does) and, from a completion thread, race reedline for
+        // keystrokes. Without a controlling terminal that open fails and the completer
+        // falls back instead.
+        if detach {
+            prepare_background_command(&mut command);
+        }
 
         // Log the command we're about to run in case it's useful for debugging purposes.
         log::trace!("run-external spawning: {command:?}");
