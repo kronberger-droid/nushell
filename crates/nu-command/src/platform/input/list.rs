@@ -1,12 +1,10 @@
+use crate::platform::RawModeGuard;
 use crossterm::{
     cursor::{Hide, MoveDown, MoveToColumn, MoveUp, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     style::Print,
-    terminal::{
-        self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, disable_raw_mode,
-        enable_raw_mode,
-    },
+    terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate},
 };
 use nu_ansi_term::{Style, ansi::RESET};
 use nu_color_config::{Alignment, StyleComputer, TextStyle};
@@ -1730,10 +1728,9 @@ impl<'a> SelectWidget<'a> {
     fn run(&mut self) -> io::Result<InteractMode> {
         let mut stderr = io::stderr();
 
-        enable_raw_mode().map_err(io_context("enable raw mode"))?;
-        scopeguard::defer! {
-            let _ = disable_raw_mode();
-        }
+        // The guard restores whatever mode was active on entry, so running inside reedline
+        // (a menu source or completer) leaves reedline's raw mode intact.
+        let _raw_mode = RawModeGuard::enter().map_err(io_context("enable raw mode"))?;
 
         // Only hide cursor for non-fuzzy modes (fuzzy modes need visible cursor for text input)
         if self.mode != SelectMode::Fuzzy && self.mode != SelectMode::FuzzyMulti {
