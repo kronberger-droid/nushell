@@ -656,26 +656,37 @@ $env.config.hooks.command_not_found = null
 #   }
 # ]
 
-# Example: Bind Ctrl+g to leave insert mode. A mode event only applies to its own
-# state machine and reports itself inapplicable elsewhere, so `until` hands the
-# key on and one binding covers both editors:
+# Example: Bind Ctrl+g to leave insert mode. `SwitchMode` names both the machine
+# and the state to land in, so each binding says exactly where it goes:
 # $env.config.keybindings ++= [
 #   {
-#     name: leave_insert_mode
+#     name: leave_vi_insert
 #     modifier: control
 #     keycode: char_g
-#     mode: [vi_insert helix_insert]
-#     event: {
-#       until: [
-#         { send: ViChangeMode, mode: normal }
-#         { send: HelixChangeMode, mode: normal }
-#       ]
-#     }
+#     mode: vi_insert
+#     event: { send: SwitchMode, mode: vi_normal }
+#   }
+#   {
+#     name: leave_helix_insert
+#     modifier: control
+#     keycode: char_g
+#     mode: helix_insert
+#     event: { send: SwitchMode, mode: helix_normal }
 #   }
 # ]
-# `ViChangeMode` takes "normal", "insert" or "visual"; `HelixChangeMode` takes
-# "normal", "insert" or "select". An unknown
-# mode name leaves the mode alone rather than erroring.
+# `mode:` takes the same names as a keybinding's own `mode:` field: emacs,
+# vi_insert, vi_normal, vi_visual, helix_insert, helix_normal, helix_select.
+# Anything else is an error when the config loads.
+#
+# Every machine is built whatever `$env.config.edit_mode` says, so a `SwitchMode`
+# binding also moves between editors: `{ send: SwitchMode, mode: helix_normal }`
+# under emacs lands in helix, and stays there until something switches back or
+# `edit_mode` itself is changed.
+#
+# `ViChangeMode` and `HelixChangeMode` were removed in reedline 0.52; a config
+# using them errors at load and wants `SwitchMode` with a prefixed mode name
+# (`{ send: ViChangeMode, mode: normal }` becomes
+# `{ send: SwitchMode, mode: vi_normal }`).
 
 # -------------
 # Abbreviations

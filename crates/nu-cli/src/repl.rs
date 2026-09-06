@@ -10,7 +10,7 @@ use crate::{
     completions::{NarrowingCache, NuCompleter},
     hints::ExternalHinter,
     prompt_update,
-    reedline_config::{KeybindingsMode, add_menus, create_keybindings},
+    reedline_config::{add_menus, create_keybindings},
     syntax_highlight::NoOpHighlighter,
     util::{eval_source, evaluate_source},
 };
@@ -25,7 +25,8 @@ use nu_parser::{lex, trim_quotes_str};
 use nu_protocol::shell_error::io::IoError;
 use nu_protocol::{BannerKind, ShellIntegrationConfig, shell_error};
 use nu_protocol::{
-    Config, HistoryConfig, HistoryFileFormat, PipelineData, ShellError, Span, Spanned, Value,
+    Config, EditBindings, HistoryConfig, HistoryFileFormat, PipelineData, ShellError, Span,
+    Spanned, Value,
     config::NuCursorShape,
     engine::{EngineState, Stack},
     report_shell_error,
@@ -39,9 +40,9 @@ use reedline::Helix;
 #[cfg(feature = "sqlite")]
 use reedline::SqliteBackedHistory;
 use reedline::{
-    CursorConfig, CwdAwareHinter, DefaultCompleter, EditCommand, Emacs, FileBackedHistory,
-    HistorySessionId, MouseClickMode, Osc133ClickEventsMarkers, Osc633Markers, Reedline,
-    SemanticPromptMarkers, Vi,
+    CursorConfig, CwdAwareHinter, DefaultCompleter, EditCommand, EditMode, Emacs,
+    FileBackedHistory, HistorySessionId, MouseClickMode, Osc133ClickEventsMarkers, Osc633Markers,
+    PromptEditMode, Reedline, SemanticPromptMarkers, Vi,
 };
 use std::sync::atomic::Ordering;
 use std::{
@@ -118,6 +119,7 @@ pub fn evaluate_repl(
 
     let mut entry_num = 0;
     let mut is_hostcommand = false;
+    let mut applied_edit_mode = None;
 
     // Let's grab the shell_integration configs
     let shell_integration_osc2 = config.shell_integration.osc2;
@@ -240,6 +242,7 @@ pub fn evaluate_repl(
                 hostname: hostname.as_deref(),
                 is_hostcommand: &mut is_hostcommand,
                 completion_cache: current_completion_cache,
+                applied_edit_mode: &mut applied_edit_mode,
             });
 
             // pass the most recent version of the line_editor back
@@ -276,6 +279,9 @@ pub fn evaluate_repl(
             Err(_) => {
                 // line_editor is lost in the error case so reconstruct a new one
                 line_editor = get_line_editor(engine_state, use_color)?;
+                // The replacement carries no edit mode of its own, so the next
+                // rebuild has to seed it from `edit_mode` rather than read it back.
+                applied_edit_mode = None;
             }
         }
     }
@@ -356,6 +362,8 @@ struct LoopContext<'a> {
     is_hostcommand: &'a mut bool,
     /// Completion cache carried across prompts (survives the per-prompt completer rebuild).
     completion_cache: NarrowingCache,
+    /// The `edit_mode` the last keybinding rebuild read, `None` before the first.
+    applied_edit_mode: &'a mut Option<EditBindings>,
 }
 
 struct RunContext<'a> {
@@ -557,6 +565,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         hostname,
         is_hostcommand,
         completion_cache,
+        applied_edit_mode,
     } = ctx;
 
     let mut start_time = Instant::now();
@@ -742,7 +751,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
 
     start_time = Instant::now();
     // Changing the line editor based on the found keybindings
-    line_editor = setup_keybindings(engine_state, line_editor);
+    line_editor = setup_keybindings(engine_state, applied_edit_mode, line_editor);
 
     perf!("keybindings", start_time, use_color);
 
@@ -1332,41 +1341,65 @@ fn setup_history(
 }
 
 ///
-/// Setup Reedline keybindingds based on the provided config
+/// Setup Reedline keybindings based on the provided config
 ///
-fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedline {
-    match create_keybindings(engine_state.get_config()) {
-        Ok(keybindings) => match keybindings {
-            KeybindingsMode::Emacs(keybindings) => {
-                let edit_mode = Box::new(Emacs::new(keybindings));
-                line_editor.with_edit_mode(edit_mode)
-            }
-            KeybindingsMode::Vi {
-                insert_keybindings,
-                normal_keybindings,
-            } => {
-                let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
-                line_editor.with_edit_mode(edit_mode)
-            }
-            KeybindingsMode::Helix {
-                insert_keybindings,
-                normal_keybindings,
-                select_keybindings,
-            } => {
-                let edit_mode = Box::new(
-                    Helix::default()
-                        .with_insert_keybindings(insert_keybindings)
-                        .with_normal_keybindings(normal_keybindings)
-                        .with_select_keybindings(select_keybindings),
-                );
-                line_editor.with_edit_mode(edit_mode)
-            }
-        },
+/// Runs before every prompt, since `$env.config` is live and an edited
+/// keybinding has to reach the next line. `applied_edit_mode` is the
+/// `edit_mode` the last rebuild read, which is what tells an edit of that
+/// setting apart from a `switchmode` binding having moved the engine off it.
+fn setup_keybindings(
+    engine_state: &EngineState,
+    applied_edit_mode: &mut Option<EditBindings>,
+    line_editor: Reedline,
+) -> Reedline {
+    let config = engine_state.get_config();
+    let tables = match create_keybindings(config) {
+        Ok(tables) => tables,
         Err(e) => {
             report_shell_error(None, engine_state, &e);
-            line_editor
+            return line_editor;
         }
-    }
+    };
+
+    // `edit_mode` seeds the first prompt and wins whenever it is edited.
+    // Otherwise the machine the engine is in right now wins, so a `switchmode`
+    // binding survives the rebuild instead of being undone by the next prompt.
+    let edit_mode_changed = applied_edit_mode.replace(config.edit_mode) != Some(config.edit_mode);
+    let target = if edit_mode_changed {
+        config.edit_mode
+    } else {
+        match line_editor.prompt_edit_mode() {
+            PromptEditMode::Emacs => EditBindings::Emacs,
+            PromptEditMode::Vi(_) => EditBindings::Vi,
+            PromptEditMode::Helix(_) => EditBindings::Helix,
+            // Not machines Nushell builds, so there is nothing to carry over.
+            PromptEditMode::Default | PromptEditMode::Custom(_) => config.edit_mode,
+        }
+    };
+
+    // Every machine is built, so a `switchmode` binding can reach any of them.
+    let emacs: Box<dyn EditMode> = Box::new(Emacs::new(tables.emacs));
+    let vi: Box<dyn EditMode> = Box::new(Vi::new(
+        tables.vi_insert,
+        tables.vi_normal,
+        tables.vi_visual,
+    ));
+    let helix: Box<dyn EditMode> = Box::new(
+        Helix::default()
+            .with_insert_keybindings(tables.helix_insert)
+            .with_normal_keybindings(tables.helix_normal)
+            .with_select_keybindings(tables.helix_select),
+    );
+    let (active, standby) = match target {
+        EditBindings::Emacs => (emacs, [vi, helix]),
+        EditBindings::Vi => (vi, [emacs, helix]),
+        EditBindings::Helix => (helix, [emacs, vi]),
+    };
+    // Registering appends, so clear first: this runs once per prompt.
+    standby.into_iter().fold(
+        line_editor.clear_edit_modes().with_edit_mode(active),
+        Reedline::with_additional_edit_mode,
+    )
 }
 
 ///
@@ -1692,6 +1725,44 @@ fn trailing_slash_looks_like_path() {
 #[test]
 fn trailing_slash_looks_like_path() {
     assert!(looks_like_path("foo/"))
+}
+
+/// A `switchmode` binding has to outlive the prompt it fired on. Rebuilding
+/// the keybindings every line is what picks up a live `$env.config`, so the
+/// machine the engine is in has to win over `edit_mode` until that setting is
+/// itself edited.
+#[test]
+fn setup_keybindings_carries_the_active_mode_across_prompts() {
+    let mut engine_state = EngineState::new();
+    let mut applied_edit_mode = None;
+
+    // The first prompt has nothing to carry, so `edit_mode` seeds it.
+    let line_editor = setup_keybindings(
+        &engine_state,
+        &mut applied_edit_mode,
+        reedline::Reedline::create(),
+    );
+    assert_eq!(line_editor.prompt_edit_mode(), PromptEditMode::Emacs);
+
+    // Stand in for a `switchmode` binding having activated the helix machine.
+    let line_editor = line_editor.with_edit_mode(Box::new(Helix::default()));
+    let line_editor = setup_keybindings(&engine_state, &mut applied_edit_mode, line_editor);
+    assert_eq!(
+        line_editor.prompt_edit_mode(),
+        PromptEditMode::Helix(reedline::PromptHelixMode::Insert),
+        "the switch survives the next prompt"
+    );
+
+    // Editing `edit_mode` still wins over whatever the engine is in.
+    let mut config = Config::clone(engine_state.get_config());
+    config.edit_mode = EditBindings::Vi;
+    engine_state.config = Arc::new(config);
+    let line_editor = setup_keybindings(&engine_state, &mut applied_edit_mode, line_editor);
+    assert_eq!(
+        line_editor.prompt_edit_mode(),
+        PromptEditMode::Vi(reedline::PromptViMode::Insert),
+        "an edited `edit_mode` overrides the carried one"
+    );
 }
 
 #[test]
