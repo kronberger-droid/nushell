@@ -1,9 +1,9 @@
 use crate::prompt_update::{
-    POST_EXECUTION_MARKER_PREFIX, POST_EXECUTION_MARKER_SUFFIX, PRE_EXECUTION_MARKER,
-    RESET_APPLICATION_MODE, VSCODE_COMMANDLINE_MARKER_PREFIX, VSCODE_COMMANDLINE_MARKER_SUFFIX,
-    VSCODE_CWD_PROPERTY_MARKER_PREFIX, VSCODE_CWD_PROPERTY_MARKER_SUFFIX,
-    VSCODE_POST_EXECUTION_MARKER_PREFIX, VSCODE_POST_EXECUTION_MARKER_SUFFIX,
-    VSCODE_PRE_EXECUTION_MARKER,
+    HIDE_CURSOR, POST_EXECUTION_MARKER_PREFIX, POST_EXECUTION_MARKER_SUFFIX, PRE_EXECUTION_MARKER,
+    RESET_APPLICATION_MODE, SHOW_CURSOR, VSCODE_COMMANDLINE_MARKER_PREFIX,
+    VSCODE_COMMANDLINE_MARKER_SUFFIX, VSCODE_CWD_PROPERTY_MARKER_PREFIX,
+    VSCODE_CWD_PROPERTY_MARKER_SUFFIX, VSCODE_POST_EXECUTION_MARKER_PREFIX,
+    VSCODE_POST_EXECUTION_MARKER_SUFFIX, VSCODE_PRE_EXECUTION_MARKER,
 };
 use crate::{
     NuHighlighter, NuValidator, NushellPrompt,
@@ -450,6 +450,13 @@ fn run_command(ctx: RunContext) -> Reedline {
     // For pre_exec_hook
     let mut start_time = Instant::now();
 
+    // Hidden since `read_line` returned. A blank line runs nothing and goes
+    // straight to the next prompt, which shows the cursor itself; anything
+    // else gets it back before the hooks and the command produce output.
+    if !command.trim().is_empty() {
+        run_ansi_sequence(SHOW_CURSOR);
+    }
+
     // Right before we start running the code the user gave us, fire the `pre_execution`
     // hook
     {
@@ -840,6 +847,14 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
     let interactive_prompt = build_interactive_prompt(engine_state, &mut line_editor);
     let input = line_editor.read_line(&interactive_prompt);
 
+    // Reedline leaves the cursor shown at column 0 of the row the next prompt
+    // takes. Everything from here to the next paint (hooks, prompt closures,
+    // the editor setup below) would otherwise run with that bare cursor on
+    // screen, which a fast terminal renders as a flash. `run_command` shows it
+    // again before a non-blank command runs; the exit arms below show it
+    // themselves, since `cleanup_exit` leaves without dropping the editor.
+    run_ansi_sequence(HIDE_CURSOR);
+
     // This lists all of the stack references that we have cleaned up
     line_editor = line_editor
         // CLEAR STACK-REFERENCE 1
@@ -911,6 +926,9 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
             // Don't use `println!`: it panics on a broken stdout (parent terminal closed).
             let _ = stdout_write_all_and_flush("\n");
 
+            // `cleanup_exit` is `process::exit` without dropping the editor,
+            // so nothing else shows the cursor hidden above.
+            run_ansi_sequence(SHOW_CURSOR);
             cleanup_exit((), engine_state, 0);
 
             // if cleanup_exit didn't exit, we should keep running
@@ -920,6 +938,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
         Ok(_) => {}
         Err(err) => {
             if !err.to_string().contains("duration") {
+                run_ansi_sequence(SHOW_CURSOR);
                 write_repl_error_details(&err);
                 cleanup_exit((), engine_state, 1);
                 return (true, stack, line_editor);

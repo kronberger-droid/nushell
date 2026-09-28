@@ -49,6 +49,12 @@ pub(crate) const VSCODE_CWD_PROPERTY_MARKER_SUFFIX: &str = "\x1b\\";
 // Reset terminal application mode sequence
 pub(crate) const RESET_APPLICATION_MODE: &str = "\x1b[?1l";
 
+// DECTCEM. The cursor stays hidden from the end of one `read_line` until a
+// non-blank command runs, so the work between two prompts never shows a bare
+// cursor on the next prompt's row (nushell/reedline#1231).
+pub(crate) const HIDE_CURSOR: &str = "\x1b[?25l";
+pub(crate) const SHOW_CURSOR: &str = "\x1b[?25h";
+
 fn get_prompt_string(
     prompt: &str,
     config: &Config,
