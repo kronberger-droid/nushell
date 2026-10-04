@@ -1,5 +1,11 @@
-use reedline::{Completer, Editor, InputMode, Menu, MenuEvent, MenuSettings, Painter, Suggestion};
+use reedline::{
+    Completer, Editor, InputMode, Menu, MenuEvent, MenuSettings, Painter, Suggestion,
+    menu_functions::{parse_selection_char, string_difference},
+};
 use std::sync::Arc;
+
+/// Marks a row selector (`!N`) in the text typed into a menu.
+pub(crate) const SELECTION_CHAR: char = '!';
 
 /// Shared command line for menu source.
 ///
@@ -9,17 +15,54 @@ use std::sync::Arc;
 /// ends sequentially with `&mut` — so `parking_lot` keeps it infallible with
 /// no poisoning branches.
 #[derive(Clone, Default, Debug)]
-pub struct MenuLine(Arc<parking_lot::Mutex<Option<String>>>);
+pub struct MenuLine(Arc<parking_lot::Mutex<Recorded>>);
+
+#[derive(Default, Debug)]
+struct Recorded {
+    line: Option<String>,
+    /// The line the menu opened on, what reedline diffs against in `Diff` mode.
+    opened: Option<String>,
+}
 
 impl MenuLine {
-    /// Record current editor line.
+    /// Record current editor line. The first one since [`Self::reopen`] is kept as
+    /// the line the menu opened on.
     pub(crate) fn record(&self, line: &str) {
-        *self.0.lock() = Some(line.to_string());
+        let mut recorded = self.0.lock();
+        recorded.opened.get_or_insert_with(|| line.to_string());
+        recorded.line = Some(line.to_string());
+    }
+
+    /// Forget the line the menu opened on, when reedline forgets its own copy.
+    fn reopen(&self) {
+        self.0.lock().opened = None;
     }
 
     /// Last recorded line.
+    #[cfg(test)]
     pub(crate) fn read(&self) -> Option<String> {
-        self.0.lock().clone()
+        self.0.lock().line.clone()
+    }
+
+    /// Last recorded line with a row selector (`!2`) cut from the text typed since
+    /// the menu opened, as reedline cuts it from what it hands the completer (#19151).
+    /// Also returns where the cut was, when there was one.
+    fn read_unmarked(&self) -> Option<(String, Option<usize>)> {
+        let recorded = self.0.lock();
+        let line = recorded.line.clone()?;
+        let Some(opened) = &recorded.opened else {
+            return Some((line, None));
+        };
+
+        let (start, typed) = string_difference(&line, opened);
+        let parsed = parse_selection_char(typed, SELECTION_CHAR);
+        if parsed.marker.is_none() {
+            return Some((line, None));
+        }
+
+        let cut = start + parsed.remainder.len();
+        let unmarked = format!("{}{}", &line[..cut], &line[start + typed.len()..]);
+        Some((unmarked, Some(cut)))
     }
 }
 
@@ -49,11 +92,14 @@ impl SourceMode {
         pos: usize,
         replacing_start: usize,
     ) -> (String, usize) {
-        let buffer = match self {
-            Self::Diff => line
-                .read()
-                .unwrap_or_else(|| " ".repeat(replacing_start) + handed),
-            Self::Live => handed.to_owned(),
+        let (buffer, pos) = match self {
+            Self::Diff => match line.read_unmarked() {
+                // The cut text ended at `pos`, reedline's end of the typed text.
+                Some((buffer, Some(cut))) => (buffer, cut),
+                Some((buffer, None)) => (buffer, pos),
+                None => (" ".repeat(replacing_start) + handed, pos),
+            },
+            Self::Live => (handed.to_owned(), pos),
         };
         let cursor = buffer.floor_char_boundary(pos.min(buffer.len()));
         (buffer, cursor)
@@ -142,6 +188,9 @@ impl<M: Menu> Menu for SourcedMenu<M> {
     }
 
     fn menu_event(&mut self, event: MenuEvent) {
+        if let (MenuEvent::Activate(_), Some(line)) = (&event, &self.line) {
+            line.reopen();
+        }
         self.menu.menu_event(event);
     }
 

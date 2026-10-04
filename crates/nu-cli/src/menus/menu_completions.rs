@@ -3,7 +3,10 @@ use crate::{
         CompletionEngine, DeclaredInputs, LegacyInputs, Returned, SpanClamp, bind_declared_inputs,
         catch_completion_panic, map_value_completions, panic_to_shell_error, report,
     },
-    menus::{MenuLine, sourced_menu::SourceMode},
+    menus::{
+        MenuLine,
+        sourced_menu::{SELECTION_CHAR, SourceMode},
+    },
 };
 use nu_engine::eval_block;
 use nu_protocol::{
@@ -13,8 +16,6 @@ use nu_protocol::{
 };
 use reedline::{Completer, CompletionResult, Suggestion, menu_functions::parse_selection_char};
 use std::sync::Arc;
-
-const SELECTION_CHAR: char = '!';
 
 pub struct NuMenuCompleter {
     block_id: BlockId,
@@ -51,8 +52,9 @@ impl Completer for NuMenuCompleter {
         let handed = parsed.remainder;
 
         let block = self.engine_state.get_block(self.block_id).clone();
-        // Reedline replacement range — never fed into `$token`/`$place`.
-        let replacing = default_span(handed, pos, self.mode);
+        // Reedline replacement range — never fed into `$token`/`$place`. Measured on the
+        // handed line, so picking a row also replaces its `!N` selector (#19151).
+        let replacing = default_span(line, pos, self.mode);
         let (buffer, cursor) = self.mode.buffer(&self.line, handed, pos, replacing.start);
 
         // Menu sources opt into inputs; parsed per keystroke only if declared.
@@ -185,6 +187,13 @@ mod tests {
         completer
     }
 
+    /// A `Diff` menu that opened on `opened` and is now on `line`.
+    fn menu_opened_on(source: &str, opened: &str, line: &str) -> NuMenuCompleter {
+        let completer = menu_on_in(SourceMode::Diff, source, opened);
+        completer.line.record(line);
+        completer
+    }
+
     fn values(result: CompletionResult) -> Vec<String> {
         result
             .suggestions()
@@ -233,6 +242,43 @@ mod tests {
                 "target=3..3"
             ],
         );
+    }
+
+    /// A row selector typed into a `Diff` menu picks a row, so it never reaches the
+    /// source: it would filter the rows away (#19151).
+    #[rstest]
+    #[case::bare("", "!2", "")]
+    #[case::after_a_query("", "doc!2", "doc")]
+    #[case::after_the_opened_line("cd ", "cd doc!2", "cd doc")]
+    fn diff_menu_source_never_sees_the_row_selector(
+        #[case] opened: &str,
+        #[case] line: &str,
+        #[case] buffer: &str,
+    ) {
+        let mut completer = menu_opened_on("{|buffer| [$buffer]}", opened, line);
+        let typed = &line[opened.len()..];
+
+        assert_eq!(values(completer.complete(typed, line.len())), [buffer]);
+    }
+
+    /// With only a selector typed, reedline counts the rows from the text before it,
+    /// which is empty. The source still sees the line, and must see it unmarked, or
+    /// the count is the filtered one (#19151).
+    #[test]
+    fn diff_menu_counts_rows_without_the_row_selector() {
+        let source = "{|buffer| [alpha beta gamma] | where $it =~ $buffer}";
+        let mut completer = menu_opened_on(source, "", "!2");
+
+        assert_eq!(completer.total_completions("", 2), 3);
+    }
+
+    /// Picking a row replaces the selector along with the query before it (#19151).
+    #[test]
+    fn diff_menu_row_replaces_the_row_selector() {
+        let mut completer = menu_opened_on("{|buffer| [alpha]}", "cd ", "cd doc!2");
+        let result = completer.complete("doc!2", 8);
+
+        assert_eq!(result.suggestions()[0].span, reedline::Span::new(3, 8));
     }
 
     /// Declaring a `buffer` parameter opts a source into the whole line up to the cursor,
