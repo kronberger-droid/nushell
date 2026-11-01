@@ -429,6 +429,7 @@ impl Command for InputList {
             .input_output_types(vec![
                 (Type::List(Box::new(Type::Any)), Type::Any),
                 (Type::Range, Type::Int),
+                (Type::Custom("SQLiteQueryBuilder".into()), Type::Any),
             ])
             .optional("prompt", SyntaxShape::String, "The prompt to display.")
             .switch(
@@ -826,10 +827,21 @@ impl InputList {
         head: Span,
         signals: Signals,
     ) -> Result<(Vec<Value>, Option<StreamReader>), ShellError> {
+        // Lazy iterable custom values, like the `SQLiteQueryBuilder` from `history`, stream like
+        // a range.
+        #[expect(deprecated)]
+        let iterable_custom = matches!(
+            &input,
+            PipelineData::Value(Value::Custom { val, .. }, ..) if val.is_iterable()
+        );
         match input {
             PipelineData::ListStream(stream, ..) => Ok(Self::read_initial_stream_values(stream)),
             PipelineData::Value(Value::List { vals, .. }, ..) => Ok((vals.into_owned(), None)),
             input @ PipelineData::Value(Value::Range { .. }, ..) => {
+                let stream = ListStream::new(input.into_iter(), head, signals);
+                Ok(Self::read_initial_stream_values(stream))
+            }
+            input if iterable_custom => {
                 let stream = ListStream::new(input.into_iter(), head, signals);
                 Ok(Self::read_initial_stream_values(stream))
             }
@@ -4623,6 +4635,38 @@ mod test {
 
         assert_eq!(values.len(), INITIAL_STREAM_MAX_ITEMS + 1);
         assert!(pending_stream.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "sqlite")]
+    fn lazy_sqlite_table_input_is_accepted() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().to_path_buf();
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("CREATE TABLE test (id INTEGER)", []).unwrap();
+            for i in 0..3 {
+                conn.execute("INSERT INTO test (id) VALUES (?)", [i])
+                    .unwrap();
+            }
+        }
+
+        let span = nu_protocol::Span::test_data();
+        let table = crate::SQLiteQueryBuilder::new(
+            db_path,
+            "test".to_string(),
+            nu_protocol::Signals::empty(),
+        );
+        let input = Value::custom(Box::new(table), span).into_pipeline_data();
+
+        let (mut values, pending_stream) =
+            InputList::initial_values_from_input(input, span, nu_protocol::Signals::empty())
+                .expect("lazy sqlite table input should be accepted");
+        if let Some(mut reader) = pending_stream {
+            values.extend(reader.drain_available_until(usize::MAX, Duration::from_secs(5)));
+        }
+
+        assert_eq!(values.len(), 3);
     }
 
     #[test]

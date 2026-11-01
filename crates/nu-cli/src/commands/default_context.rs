@@ -31,6 +31,7 @@ pub fn add_cli_context(mut engine_state: EngineState) -> EngineState {
 
         #[cfg(feature = "sqlite")]
         bind_command! {
+            HistoryDelete,
             HistoryImport,
             HistorySession
         };

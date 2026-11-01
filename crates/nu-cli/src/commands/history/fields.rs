@@ -4,6 +4,7 @@ pub const COMMAND_LINE: &str = "command";
 
 #[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 mod sqlite_only_fields {
+    pub const ITEM_ID: &str = "item_id";
     pub const START_TIMESTAMP: &str = "start_timestamp";
     pub const HOSTNAME: &str = "hostname";
     pub const CWD: &str = "cwd";
