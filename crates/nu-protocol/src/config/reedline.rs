@@ -44,8 +44,8 @@ impl KeyIdentity {
             // Best-effort mirror of `add_parsed_keybinding`'s reading: modifiers
             // are an unordered `_`-joined set and `esc`/`escape` are aliases. The
             // exotic overlaps (`space` vs `char_ `, `char_u<hex>` vs `char_<c>`)
-            // are deliberately not canonicalized; a mismatch only costs an
-            // append plus a warning, never a lost binding.
+            // are deliberately not canonicalized; a mismatch only keeps a
+            // duplicate entry, never loses a binding.
             modifier: lower(&kb.modifier).split('_').map(|s| s.into()).collect(),
             keycode: match lower(&kb.keycode).as_str() {
                 "esc" => "escape".into(),

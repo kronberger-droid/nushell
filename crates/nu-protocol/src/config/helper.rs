@@ -160,6 +160,27 @@ pub(super) fn config_update_string_enum<T>(
     }
 }
 
+/// Collapses entries of an assigned config list that share a key.
+///
+/// The later entry wins but takes the earlier one's position, so appending a
+/// binding that is already in the list (re-sourcing a config that uses `++=`)
+/// updates it in place instead of growing the list. Entries with distinct keys
+/// keep their order.
+pub(super) fn dedup_by_key_last_wins<T, K: PartialEq>(
+    items: Vec<T>,
+    key: impl Fn(&T) -> K,
+) -> Vec<T> {
+    let mut kept: Vec<(K, T)> = Vec::with_capacity(items.len());
+    for item in items {
+        let k = key(&item);
+        match kept.iter_mut().find(|(seen, _)| *seen == k) {
+            Some((_, slot)) => *slot = item,
+            None => kept.push((k, item)),
+        }
+    }
+    kept.into_iter().map(|(_, item)| item).collect()
+}
+
 pub fn extract_value<'record>(
     column: &'static str,
     record: &'record Record,

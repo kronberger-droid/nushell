@@ -733,13 +733,13 @@ $env.config.hooks.command_not_found = null
 # etc.). Inspect with `$env.config.keybindings`. Reedline's base emacs/vi maps are
 # still applied underneath and are listed by `keybindings default`.
 #
-# Assigning this list merges into the current bindings rather than replacing
-# them (an emptied list stays empty; defaults are not reintroduced).
-# An entry replaces the existing binding with the same name (updating its key
-# or event in place); when several bindings share a name, the key
-# (modifier/keycode/mode) decides which one it is, and a name reused for a
-# genuinely new key appends with a one-time warning. Set `event: null` on a
-# matching binding to unbind a key, or assign `[]` to clear the whole list.
+# Assigning this list replaces it, defaults included, so add bindings with
+# `++=` to keep the defaults. Entries with the same name, modifier, keycode and
+# mode are one binding: the later one wins and keeps the earlier one's place,
+# so re-sourcing a config that appends stays idempotent. To remove a binding,
+# assign the list without it:
+# $env.config.keybindings = $env.config.keybindings | where name != my_binding
+# Assign `[]` to clear the whole list.
 
 # Example: Add Alt+. keybinding to insert the last token from previous command:
 # $env.config.keybindings ++= [

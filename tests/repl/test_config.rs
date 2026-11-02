@@ -91,6 +91,27 @@ fn mutate_nu_config_nested_keybindings() -> TestResult {
     )
 }
 
+/// Assigning `keybindings` replaces the list, so a filtered list unbinds what
+/// it dropped and `++=` keeps the defaults.
+#[test]
+fn reassigning_keybindings_unbinds_filtered_entries() -> TestResult {
+    run_test_std(
+        "
+            let defaults = $env.config.keybindings | length;
+            $env.config.keybindings ++= [
+                { name: test, modifier: control, keycode: char_t, mode: [emacs vi_insert], event: null }
+            ];
+            $env.config.keybindings ++= [
+                { name: test, modifier: control, keycode: char_t, mode: [emacs vi_insert], event: null }
+            ];
+            let added = ($env.config.keybindings | length) == $defaults + 1;
+            $env.config.keybindings = $env.config.keybindings | where name != test;
+            $added and ($env.config.keybindings | length) == $defaults
+        ",
+        "true",
+    )
+}
+
 #[test]
 fn mutate_nu_config_nested_color_nested() -> TestResult {
     run_test_std(
