@@ -258,21 +258,13 @@ impl UpdateFromValue for Config {
                     self.max_last_result_size.update(val, current_path, errors)
                 }
 
+                // Same semantics as `keybindings`: assignment replaces the
+                // list and menus sharing a name collapse, later one winning.
                 "menus" => match Vec::<ParsedMenu>::from_value(val.clone()) {
                     Ok(menus) => {
-                        for menu in menus {
-                            let target_name = menu.name.to_expanded_string("", self);
-
-                            let found_index = self.menus.iter().position(|existing_menu| {
-                                existing_menu.name.to_expanded_string("", self) == target_name
-                            });
-
-                            if let Some(index) = found_index {
-                                self.menus[index] = menu;
-                            } else {
-                                self.menus.push(menu);
-                            }
-                        }
+                        self.menus = dedup_by_key_last_wins(menus, |menu| {
+                            menu.name.to_expanded_string("", self)
+                        })
                     }
                     Err(error) => errors.error(error.into()),
                 },
@@ -393,31 +385,59 @@ impl Config {
 mod tests {
     use super::*;
 
-    /// Assigning `menus` still merges by name: a menu the caller didn't
-    /// mention keeps its default.
+    /// Run one `$env.config.menus = [...]` assignment.
+    fn assign_menus(config: &mut Config, old: &Config, menus: Vec<ParsedMenu>) {
+        let value = Value::test_record(record! {
+            "menus" => Value::test_list(
+                menus
+                    .into_iter()
+                    .map(|menu| menu.into_value(Span::test_data()))
+                    .collect(),
+            ),
+        });
+        config
+            .update_from_value(old, &value)
+            .expect("update should succeed");
+    }
+
+    fn menu_names(config: &Config) -> Vec<String> {
+        config
+            .menus
+            .iter()
+            .map(|menu| menu.name.to_expanded_string("", config))
+            .collect()
+    }
+
+    /// Assigning `menus` replaces the list, defaults included.
     #[test]
-    fn reassigning_menus_keeps_unmentioned_defaults() {
+    fn assigning_menus_replaces_the_list() {
         let old = Config::default();
         let mut new = old.clone();
 
-        let mut extra_menu = old.menus[0].clone();
-        extra_menu.name = Value::test_string("added_menu");
+        let mut extra = old.menus[0].clone();
+        extra.name = Value::test_string("added_menu");
+        assign_menus(&mut new, &old, vec![extra]);
 
-        let value = Value::test_record(record! {
-            "menus" => Value::test_list(vec![extra_menu.into_value(Span::test_data())]),
-        });
-        new.update_from_value(&old, &value)
-            .expect("update should succeed");
+        assert_eq!(menu_names(&new), ["added_menu"]);
+    }
 
-        for default_menu in &old.menus {
-            let name = default_menu.name.to_expanded_string("", &old);
-            assert!(
-                new.menus
-                    .iter()
-                    .any(|m| m.name.to_expanded_string("", &new) == name),
-                "default menu {name:?} was lost after reassigning `menus`"
-            );
+    /// `++=` with a default's name overrides that default in place, and doing
+    /// it again (re-sourcing) does not grow the list.
+    #[test]
+    fn appending_a_menu_with_a_default_name_overrides_it_in_place() {
+        let old = Config::default();
+        let mut new = old.clone();
+
+        let mut custom = old.menus[0].clone();
+        custom.marker = Value::test_string("custom> ");
+        for _ in 0..2 {
+            let mut menus = new.menus.clone();
+            menus.push(custom.clone());
+            assign_menus(&mut new, &old, menus);
         }
+
+        assert_eq!(menu_names(&new), menu_names(&old));
+        assert_eq!(new.menus[0].marker, Value::test_string("custom> "));
     }
 
     /// Guards the unnamed case: with no `name` to merge on, every reassignment

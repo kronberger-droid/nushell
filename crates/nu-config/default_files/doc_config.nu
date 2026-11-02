@@ -832,8 +832,10 @@ $env.config.abbreviations = {}
 # {completions, options} record name engine behaviour a menu has no say in and are ignored.
 #
 # Default: completion_menu, ide_completion_menu, history_menu, help_menu.
-# Inspect with `$env.config.menus`. Assigning this list merges into the
-# defaults by `name` rather than replacing them, so `=` never clears them.
+# Inspect with `$env.config.menus`. Assigning this list replaces it, defaults
+# included, so add menus with `++=`. Menus sharing a `name` are one menu: the
+# later one wins and keeps the earlier one's place, so `++=` with a default's
+# name overrides that default.
 
 # Example: Custom completion menu configuration:
 # $env.config.menus ++= [{
