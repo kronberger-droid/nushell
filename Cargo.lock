@@ -7815,7 +7815,7 @@ dependencies = [
 [[package]]
 name = "reedline"
 version = "0.53.0"
-source = "git+https://github.com/nushell/reedline?branch=main#452867edff3660abad7dc54c8ed96d0f36373c7e"
+source = "git+https://github.com/kronberger-droid/reedline?branch=frame-painter-daily#c87265a8f632df73279824b1c9c029c9a716396e"
 dependencies = [
  "arboard",
  "crossterm",
