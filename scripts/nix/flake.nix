@@ -1,6 +1,7 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -52,49 +53,15 @@
           cargo = final.rustToolchain-latest-devshell;
           rustc = final.rustToolchain-latest-devshell;
         };
-        nushell = previous.callPackage ./. {
-          rustPlatform = final.rustPlatform';
+        # nushell, its plugins and the CI checks, built incrementally with
+        # crane. See ./crane.nix.
+        nushellCrane = final.callPackage ./crane.nix {
+          craneLib = (inputs.crane.mkLib final).overrideToolchain final.rustToolchain';
+          inherit (final.rustPlatform') bindgenHook;
+          commitHash = inputs.self.rev or inputs.self.dirtyRev or null;
         };
-        nushellPlugins =
-          previous.nushellPlugins
-          // (builtins.mapAttrs
-            (
-              pname: d:
-              previous.callPackage ./. (
-                {
-                  pname = "nu_plugin_${pname}";
-                  rustPlatform = final.rustPlatform';
-                  extraCargo = ../../crates + "/nu_plugin_${pname}/Cargo.toml";
-                  buildAndTestSubdir = "crates/nu_plugin_${pname}";
-                  nativeBuildInputs = [
-                    previous.pkg-config
-                  ]
-                  ++ lib.optionals previous.stdenv.cc.isClang [ final.rustPlatform'.bindgenHook ]
-                  ++ (d.extraNativeBuildInputs or [ ]);
-                }
-                // d
-              )
-            )
-            {
-              formats = { };
-              gstat = {
-                buildInputs = [ previous.openssl ];
-              };
-              inc = { };
-              polars = {
-                buildInputs = [ previous.openssl ];
-                checkFlags = [
-                  "--skip=dataframe::command::core::to_repr::test::test_examples"
-                ];
-              };
-              query = {
-                buildInputs = [
-                  previous.openssl
-                  previous.curlMinimal
-                ];
-              };
-            }
-          );
+        nushell = final.nushellCrane.nushell;
+        nushellPlugins = previous.nushellPlugins // final.nushellCrane.plugins;
       };
       forEachSupportedSystem =
         f:
@@ -120,11 +87,10 @@
         {
           inherit (pkgs) nushell;
           default = pkgs.nushell;
-          dev = pkgs.nushell.override {
-            buildType = "dev";
-          };
+          dev = (pkgs.nushellCrane.override { profile = "dev"; }).nushell;
         }
       );
+      checks = forEachSupportedSystem ({ pkgs, ... }: pkgs.nushellCrane.checks);
       legacyPackages = forEachSupportedSystem (
         { pkgs, ... }:
         {

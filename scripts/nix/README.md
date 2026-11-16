@@ -7,8 +7,21 @@ will need to be told the location of the flake:
 ```console
 $ nix run ./scripts/nix
 $ nix build ./scripts/nix
+$ nix flake check ./scripts/nix
 $ nix flake update --flake ./scripts/nix
 ```
+
+The flake builds with [crane](https://github.com/ipetkov/crane) (`crane.nix`), which compiles the
+third-party dependencies in their own derivations. They only rebuild when `Cargo.toml` or
+`Cargo.lock` change, so editing the sources recompiles just the workspace crates.
+
+`nix flake check` runs the same fmt, clippy and test steps as CI, in the `ci` profile:
+
+```console
+$ nix build ./scripts/nix#checks.x86_64-linux.clippy
+```
+
+`default.nix` is the generic expression for use without flakes; see below.
 
 ## Including in another flake
 
@@ -35,18 +48,8 @@ $ nix flake update --flake ./scripts/nix
 
 ### Adding the hash to `version`
 
-The `inputs.nushell.rev` variable can be used to get the commit hash in the
-output of `version`:
-
-```nix
-{
-# ...
-      nushell = inputs.nushell.packages.x86_64-linux.nushell.override {
-        NU_COMMIT_HASH = inputs.nushell.rev;
-      };
-# ...
-}
-```
+The flake passes its own git revision as `NU_COMMIT_HASH`, so `version` shows
+the commit the package was built from without any extra configuration.
 
 ## Using the Overlay
 
