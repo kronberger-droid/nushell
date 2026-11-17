@@ -17,6 +17,7 @@ The expressions the flake calls live here in `scripts/nix`:
   own derivations. They only rebuild when `Cargo.toml` or `Cargo.lock` change, so editing the
   sources recompiles just the workspace crates.
 - `default.nix` is the generic expression for use without flakes; see below.
+- `nightly-bin` is a second, separate flake that installs the prebuilt nightly archives; see below.
 
 ## Outputs
 
@@ -134,6 +135,33 @@ in
   nushell = pkgs.callPackage ./scripts/nix { };
 }
 ```
+
+## Prebuilt nightlies: `nightly-bin`
+
+`scripts/nix/nightly-bin` is a template for a second flake that compiles nothing. It installs `nu`
+and the plugins from the release archives of [nushell/nightly](https://github.com/nushell/nightly),
+patched to run from the Nix store. It has the same output names as the flake above (`packages`,
+`legacyPackages.<system>.nushellPlugins`, `overlays.default`), so a consumer switches between
+building from source and the prebuilt nightly by changing the input URL.
+
+The template becomes a flake once it has a `nightly.json`, which names a release and the URL and
+hash of its archive per system. `update.nu` writes it from the GitHub API:
+
+```console
+$ cd scripts/nix/nightly-bin
+$ nu update.nu                                    # the latest nightly
+$ nu update.nu --tag 0.117.1-nightly.5+4e65e63    # a specific one
+$ nix build path:.#full
+```
+
+`nightly.json` is not committed here, since the main branch is built before its nightly exists.
+To publish the flake, the nightly workflow has to run `update.nu` after the release assets are
+uploaded and commit `flake.nix`, `package.nix`, `nightly.json` and a `flake.lock` to a branch of
+their own in nushell/nightly, since its `main` is reset to this repo every night. That step is not
+part of the workflow yet.
+
+A published revision keeps working only as long as its release exists, and the nightly workflow
+deletes all but the newest ten.
 
 ## Keeping it working
 
