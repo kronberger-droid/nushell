@@ -33,6 +33,12 @@
 let
   cargoToml = lib.importTOML (nushellSrc + "/Cargo.toml");
 
+  # The lint flags of the `nuclippy` cargo alias, i.e. what follows its `--`.
+  # Read from the alias so the clippy check cannot drift from what CI runs.
+  clippyLints = lib.last (
+    lib.splitString " -- " (lib.importTOML (nushellSrc + "/.cargo/config.toml")).alias.nuclippy
+  );
+
   # A local checkout is filtered down to what the build reads, so editing the
   # Nix files or docs does not rebuild anything. A flake input arrives as a
   # store path string, which lib.fileset cannot filter; it is used as is.
@@ -140,8 +146,7 @@ let
     cargoArtifacts = nuDeps;
     # Set here and not in commonArgs: it changes with every commit, and in the
     # dependency builds it would invalidate them every time.
-    env =
-      commonArgs.env // lib.optionalAttrs (commitHash != null) { NU_COMMIT_HASH = commitHash; };
+    env = commonArgs.env // lib.optionalAttrs (commitHash != null) { NU_COMMIT_HASH = commitHash; };
     passthru.shellPath = "/bin/nu";
     meta = {
       inherit (cargoToml.package) description homepage;
@@ -180,13 +185,14 @@ let
   checks = {
     fmt = craneLib.cargoFmt { inherit src; };
 
-    # Same flags as the `nuclippy` alias in .cargo/config.toml.
+    # The `nuclippy` alias in .cargo/config.toml, with its lint flags taken
+    # from there.
     clippy = craneLib.cargoClippy (
       ciArgs
       // {
         cargoArtifacts = ciDeps;
         cargoExtraArgs = "--locked --workspace --exclude 'nu_plugin_*'";
-        cargoClippyExtraArgs = "--all-targets -- -D warnings -D clippy::unwrap_used -D clippy::unchecked_time_subtraction";
+        cargoClippyExtraArgs = "--all-targets -- ${clippyLints}";
       }
     );
 

@@ -23,8 +23,12 @@ const wasm_compatible_crates = [
     "nuon"
 ]
 
+# Install the wasm target through rustup. Without rustup, as in the Nix dev
+# shells, the toolchain has to carry the target already (`nix develop .#full`).
 def "prep wasm" [] {
-    ^rustup target add wasm32-unknown-unknown
+    if (which rustup | is-not-empty) {
+        ^rustup target add wasm32-unknown-unknown
+    }
 }
 
 # Build crates for wasm.
