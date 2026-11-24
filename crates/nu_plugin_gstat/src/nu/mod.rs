@@ -1,4 +1,4 @@
-use crate::GStat;
+use crate::{GStat, TagMode};
 use nu_plugin::{EngineInterface, EvaluatedCall, Plugin, PluginCommand, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Spanned, SyntaxShape, Value};
 
@@ -36,6 +36,11 @@ that was also edited counts in wt_modified too. An ignored directory counts once
     fn signature(&self) -> Signature {
         Signature::build(PluginCommand::name(self))
             .switch("no-tag", "Disable git tag resolving.", None)
+            .switch(
+                "exact-tag",
+                "Only report a tag that is on HEAD, without searching for the nearest one.",
+                None,
+            )
             .optional("path", SyntaxShape::Filepath, "Path to repo.")
             .category(Category::Custom("prompt".to_string()))
     }
@@ -50,8 +55,14 @@ that was also edited counts in wt_modified too. An ignored directory counts once
         let repo_path: Option<Spanned<String>> = call.opt(0)?;
         // eprintln!("input value: {:#?}", &input);
         let current_dir = engine.get_current_dir()?;
-        let disable_tag = call.has_flag("no-tag")?;
+        let tags = if call.has_flag("no-tag")? {
+            TagMode::Skip
+        } else if call.has_flag("exact-tag")? {
+            TagMode::Exact
+        } else {
+            TagMode::Nearest
+        };
 
-        self.gstat(input, &current_dir, repo_path, !disable_tag, call.head)
+        self.gstat(input, &current_dir, repo_path, tags, call.head)
     }
 }

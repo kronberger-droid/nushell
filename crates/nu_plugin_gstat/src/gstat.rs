@@ -11,6 +11,17 @@ use std::{collections::HashMap, fmt::Write, ops::BitAnd, path::Path};
 #[derive(Default)]
 pub struct GStat;
 
+/// How much work goes into the `tag` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagMode {
+    /// None: the column reads `no_tag`.
+    Skip,
+    /// Only a tag that sits on `HEAD` itself, which needs no walk through the history.
+    Exact,
+    /// The nearest tag reachable from `HEAD`, like `git describe --tags`.
+    Nearest,
+}
+
 impl GStat {
     pub fn new() -> Self {
         Default::default()
@@ -21,7 +32,7 @@ impl GStat {
         value: &Value,
         current_dir: &str,
         path: Option<Spanned<String>>,
-        calculate_tag: bool,
+        tags: TagMode,
         span: Span,
     ) -> Result<Value, LabeledError> {
         // use std::any::Any;
@@ -96,10 +107,12 @@ impl GStat {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let tag = calculate_tag
-            .then(|| nearest_tag(&repo))
-            .flatten()
-            .unwrap_or_else(|| "no_tag".to_string());
+        let tag = match tags {
+            TagMode::Skip => None,
+            TagMode::Exact => describe_tag(&repo, true),
+            TagMode::Nearest => describe_tag(&repo, false),
+        }
+        .unwrap_or_else(|| "no_tag".to_string());
 
         // Leave this in case we want to turn it into a table instead of a list
         // Ok(Value::List {
@@ -417,7 +430,10 @@ impl Stats {
 /// cost hundreds of milliseconds on large repositories every time a prompt was drawn. Tags are
 /// few, so this maps every tag to the commit it points at once and then walks back from `HEAD`
 /// only until the first tagged commit.
-fn nearest_tag(repo: &Repository) -> Option<String> {
+///
+/// With `exact` the walk is skipped altogether: a tag is only reported when it is on `HEAD`. That
+/// is all a prompt wants to know, and it keeps the cost flat however far back the last tag is.
+fn describe_tag(repo: &Repository, exact: bool) -> Option<String> {
     let mut tagged_commits: HashMap<Oid, String> = HashMap::new();
     for reference in repo.references_glob("refs/tags/*").ok()?.flatten() {
         if let (Ok(name), Ok(commit)) = (reference.shorthand(), reference.peel_to_commit()) {
@@ -433,6 +449,9 @@ fn nearest_tag(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?.peel_to_commit().ok()?.id();
     if let Some(tag) = tagged_commits.get(&head) {
         return Some(tag.clone());
+    }
+    if exact {
+        return None;
     }
 
     // The default walk order yields commits lazily; a topological sort would load the whole
@@ -490,18 +509,41 @@ mod tests {
     }
 
     fn gstat(dir: &Path) -> Record {
+        gstat_with(dir, TagMode::Skip)
+    }
+
+    fn gstat_with(dir: &Path, tags: TagMode) -> Record {
         let span = Span::test_data();
         GStat::new()
             .gstat(
                 &Value::nothing(span),
                 dir.to_str().unwrap(),
                 None,
-                false,
+                tags,
                 span,
             )
             .unwrap()
             .into_record()
             .unwrap()
+    }
+
+    /// Commits whatever is in the working tree of `repo` on top of `HEAD`.
+    fn commit_all(repo: &Repository, message: &str) -> Oid {
+        let mut index = repo.index().unwrap();
+        index.add_all(["*"], IndexAddOption::DEFAULT, None).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::now("gstat", "gstat@example.com").unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &[&parent],
+        )
+        .unwrap()
     }
 
     fn int(record: &Record, column: &str) -> i64 {
@@ -564,6 +606,26 @@ mod tests {
         // the move shows up either as a rename or as a deletion plus an untracked file.
         assert_eq!(int(&record, "wt_deleted") + int(&record, "wt_renamed"), 1);
         assert_eq!(int(&record, "wt_untracked") + int(&record, "wt_renamed"), 2);
+    }
+
+    #[test]
+    fn exact_tag_is_only_reported_on_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path(), "main", &[("a.txt", "a\n")]);
+        let tag = |mode| string(&gstat_with(dir.path(), mode), "tag").to_string();
+
+        assert_eq!(tag(TagMode::Exact), "no_tag");
+
+        let head = repo.head().unwrap().peel(git2::ObjectType::Commit).unwrap();
+        repo.tag_lightweight("v1", &head, false).unwrap();
+        assert_eq!(tag(TagMode::Exact), "v1");
+        assert_eq!(tag(TagMode::Nearest), "v1");
+
+        fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        commit_all(&repo, "second");
+        assert_eq!(tag(TagMode::Exact), "no_tag");
+        assert!(tag(TagMode::Nearest).starts_with("v1-1-g"));
+        assert_eq!(tag(TagMode::Skip), "no_tag");
     }
 
     #[test]
