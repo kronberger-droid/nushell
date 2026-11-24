@@ -7,5 +7,5 @@ fn main() {
     // anything, and on a large repository the check was about a seventh of a call.
     git2::opts::strict_hash_verification(false);
 
-    serve_plugin(&GStatPlugin, MsgPackSerializer {})
+    serve_plugin(&GStatPlugin::default(), MsgPackSerializer {})
 }

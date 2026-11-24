@@ -1,6 +1,13 @@
 use git2::{Branch, BranchType, Oid, Repository};
 use nu_protocol::{IntoSpanned, LabeledError, Span, Spanned, Value, record};
-use std::{collections::HashMap, fmt::Write, ops::BitAnd, path::Path};
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    fmt::Write,
+    ops::BitAnd,
+    path::Path,
+    sync::{Mutex, PoisonError},
+};
 
 // git status
 // https://github.com/git/git/blob/9875c515535860450bafd1a177f64f0a478900fa/Documentation/git-status.txt
@@ -10,6 +17,34 @@ use std::{collections::HashMap, fmt::Write, ops::BitAnd, path::Path};
 
 #[derive(Default)]
 pub struct GStat;
+
+/// The repository of the last call, kept open for the next one.
+///
+/// A plugin process outlives a call, and a prompt asks about the same repository again and again.
+/// Opening it afresh every time reads the index and maps the pack files again, which on a large
+/// repository costs about as much as the status itself. libgit2 notices by itself when the index,
+/// the references or the packs change on disk, so a kept handle still reports the current state.
+///
+/// The handle is taken out for the length of a call rather than borrowed, so calls running at the
+/// same time never wait on each other: the first gets the kept handle and the others open their
+/// own.
+#[derive(Default)]
+pub struct RepoCache(Mutex<Option<Repository>>);
+
+impl RepoCache {
+    /// Take the kept repository out if it is the one with this git directory.
+    fn take(&self, git_dir: &Path) -> Option<Repository> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_if(|repo| repo.path() == git_dir)
+    }
+
+    /// Keep `repo` for the next call, replacing whichever one was kept before.
+    fn put(&self, repo: Repository) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(repo);
+    }
+}
 
 /// How much work goes into the `tag` column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +64,7 @@ impl GStat {
 
     pub fn gstat(
         &self,
+        cache: &RepoCache,
         value: &Value,
         current_dir: &str,
         path: Option<Spanned<String>>,
@@ -91,11 +127,15 @@ impl GStat {
             }
         };
 
-        let (stats, repo) = if let Ok(mut repo) = Repository::discover(repo_path) {
-            (Stats::new(&mut repo), repo)
-        } else {
+        // Finding the git directory opens nothing, so it is cheap enough to do on every call to
+        // learn whether the kept repository is still the right one.
+        let kept = Repository::discover_path(&repo_path, None::<&OsStr>)
+            .ok()
+            .and_then(|git_dir| cache.take(&git_dir));
+        let Some(mut repo) = kept.or_else(|| Repository::discover(&repo_path).ok()) else {
             return Ok(self.create_empty_git_status(span));
         };
+        let stats = Stats::new(&mut repo);
 
         // Name the repo after its working directory. The git dir's parent only works for a plain
         // checkout: a linked worktree's git dir is `.git/worktrees/<name>` and a submodule's is
@@ -113,6 +153,7 @@ impl GStat {
             TagMode::Nearest => describe_tag(&repo, false),
         }
         .unwrap_or_else(|| "no_tag".to_string());
+        cache.put(repo);
 
         // Leave this in case we want to turn it into a table instead of a list
         // Ok(Value::List {
@@ -509,13 +550,14 @@ mod tests {
     }
 
     fn gstat(dir: &Path) -> Record {
-        gstat_with(dir, TagMode::Skip)
+        gstat_with(&RepoCache::default(), dir, TagMode::Skip)
     }
 
-    fn gstat_with(dir: &Path, tags: TagMode) -> Record {
+    fn gstat_with(cache: &RepoCache, dir: &Path, tags: TagMode) -> Record {
         let span = Span::test_data();
         GStat::new()
             .gstat(
+                cache,
                 &Value::nothing(span),
                 dir.to_str().unwrap(),
                 None,
@@ -612,7 +654,8 @@ mod tests {
     fn exact_tag_is_only_reported_on_head() {
         let dir = tempfile::tempdir().unwrap();
         let repo = init_repo(dir.path(), "main", &[("a.txt", "a\n")]);
-        let tag = |mode| string(&gstat_with(dir.path(), mode), "tag").to_string();
+        let cache = RepoCache::default();
+        let tag = |mode| string(&gstat_with(&cache, dir.path(), mode), "tag").to_string();
 
         assert_eq!(tag(TagMode::Exact), "no_tag");
 
@@ -626,6 +669,66 @@ mod tests {
         assert_eq!(tag(TagMode::Exact), "no_tag");
         assert!(tag(TagMode::Nearest).starts_with("v1-1-g"));
         assert_eq!(tag(TagMode::Skip), "no_tag");
+    }
+
+    /// Everything here changes the repository behind the back of the handle that the cache keeps,
+    /// with a second handle, the way `git` run from the shell would between two prompts.
+    #[test]
+    fn kept_repository_sees_what_changed_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(dir.path(), "main", &[("a.txt", "a\n")]);
+        let cache = RepoCache::default();
+        let stat = || gstat_with(&cache, dir.path(), TagMode::Exact);
+
+        let record = stat();
+        assert_eq!(int(&record, "wt_untracked"), 0);
+        assert_eq!(string(&record, "branch"), "main");
+
+        // A new file, then a rule that ignores it.
+        fs::write(dir.path().join("build.log"), "").unwrap();
+        assert_eq!(int(&stat(), "wt_untracked"), 1);
+        fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+        let record = stat();
+        assert_eq!(int(&record, "ignored"), 1);
+        assert_eq!(int(&record, "wt_untracked"), 1);
+
+        // Staged, then committed and tagged.
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(".gitignore")).unwrap();
+        index.write().unwrap();
+        let record = stat();
+        assert_eq!(int(&record, "idx_added_staged"), 1);
+        assert_eq!(int(&record, "wt_untracked"), 0);
+        let second = commit_all(&repo, "second");
+        repo.tag_lightweight("v2", &repo.find_object(second, None).unwrap(), false)
+            .unwrap();
+        let record = stat();
+        assert_eq!(int(&record, "idx_added_staged"), 0);
+        assert_eq!(string(&record, "tag"), "v2");
+
+        // Another branch checked out.
+        repo.branch("topic", &repo.find_commit(second).unwrap(), false)
+            .unwrap();
+        repo.set_head("refs/heads/topic").unwrap();
+        assert_eq!(string(&stat(), "branch"), "topic");
+    }
+
+    #[test]
+    fn kept_repository_is_not_used_for_another_one() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(&dir.path().join("one"), "main", &[("a.txt", "a\n")]);
+        init_repo(&dir.path().join("two"), "trunk", &[]);
+        let cache = RepoCache::default();
+
+        for (name, branch) in [("one", "main"), ("two", "trunk"), ("one", "main")] {
+            let record = gstat_with(&cache, &dir.path().join(name), TagMode::Skip);
+            assert_eq!(string(&record, "repo_name"), name);
+            assert_eq!(string(&record, "branch"), branch);
+        }
+        // Outside any repository the kept one must not answer either.
+        let outside = tempfile::tempdir().unwrap();
+        let record = gstat_with(&cache, outside.path(), TagMode::Skip);
+        assert_eq!(string(&record, "repo_name"), "no_repository");
     }
 
     #[test]
