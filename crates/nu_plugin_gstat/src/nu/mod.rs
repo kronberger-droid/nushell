@@ -1,8 +1,13 @@
-use crate::GStat;
+use crate::{GStat, RepoCache};
 use nu_plugin::{EngineInterface, EvaluatedCall, Plugin, PluginCommand, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Spanned, SyntaxShape, Value};
 
-pub struct GStatPlugin;
+/// The plugin, with the state that lives as long as its process does.
+#[derive(Default)]
+pub struct GStatPlugin {
+    /// The repository the last call looked at, see [`RepoCache`].
+    repo: RepoCache,
+}
 
 impl Plugin for GStatPlugin {
     fn version(&self) -> String {
@@ -42,7 +47,7 @@ that was also edited counts in wt_modified too. An ignored directory counts once
 
     fn run(
         &self,
-        _plugin: &GStatPlugin,
+        plugin: &GStatPlugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
         input: &Value,
@@ -52,6 +57,13 @@ that was also edited counts in wt_modified too. An ignored directory counts once
         let current_dir = engine.get_current_dir()?;
         let disable_tag = call.has_flag("no-tag")?;
 
-        self.gstat(input, &current_dir, repo_path, !disable_tag, call.head)
+        self.gstat(
+            &plugin.repo,
+            input,
+            &current_dir,
+            repo_path,
+            !disable_tag,
+            call.head,
+        )
     }
 }
