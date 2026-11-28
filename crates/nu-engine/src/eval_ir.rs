@@ -11,7 +11,7 @@ use nu_protocol::{
     combined_type_string,
     debugger::{DebugContext, WithDebug, WithoutDebug},
     engine::{
-        Argument, Closure, EngineState, EnvName, ErrorHandler, Matcher, Redirection, Stack,
+        Argument, Closure, EngineState, EnvName, ErrorHandler, PatternMismatch, Redirection, Stack,
         StateWorkingSet, TryHandler, env_var_eq,
     },
     ir::{Call, CallBuilder, DataSlice, Instruction, IrBlock, Literal, RedirectMode},
@@ -546,6 +546,18 @@ fn unwind_through_handlers(ctx: &mut EvalContext<'_>, mut unwind: Unwind, span: 
                         }
                         Err(err) => Unwind::Error(err.into_spanned(span)),
                     };
+                }
+                // An external that handles Ctrl-C itself, like `ssh`, can fail because of it
+                // while the interrupt is still pending. The interrupt wins over that failure, as
+                // it does when such an external exits 0: `finally` runs with it cleared, and it is
+                // raised afterwards. Only `finally` does this; `catch` would swallow the Ctrl-C.
+                if let Unwind::Error(err) | Unwind::ErrorValue { error: err, .. } = &unwind
+                    && !matches!(err.item, ShellError::Exit { .. })
+                    && !err.item.is_interrupt()
+                    && ctx.engine_state.signals().interrupted()
+                {
+                    let span = err.span;
+                    unwind = Unwind::Error(ShellError::Interrupted { span }.into_spanned(span));
                 }
                 // The block gets to see the error that led to it (but not `exit`), otherwise
                 // its register is set to empty.
@@ -1350,7 +1362,7 @@ fn eval_instruction<D: DebugContext>(
         } => {
             let value = ctx.clone_reg_value(*src, *span)?;
             ctx.matches.clear();
-            if pattern.match_value(&value, &mut ctx.matches) {
+            if pattern.check(*span, &value, &mut ctx.matches).is_ok() {
                 // Match succeeded: set variables and branch
                 for (var_id, match_value) in ctx.matches.drain(..) {
                     ctx.stack.add_var(var_id, match_value);
@@ -1361,6 +1373,53 @@ fn eval_instruction<D: DebugContext>(
                 ctx.matches.clear();
                 Ok(Continue)
             }
+        }
+        Instruction::Destructure { pattern, src } => {
+            // Match against a borrow of the register, so the value stays in `src` for the
+            // pass-through form (`$value | let {$a}`) and only the bound parts are cloned.
+            let nothing;
+            let value = match ctx.borrow_reg(*src) {
+                // An error value raises its error, as storing it in a variable does.
+                PipelineData::Value(Value::Error { error, .. }, _) => return Err(*error.clone()),
+                PipelineData::Value(value, _) => value,
+                PipelineData::Empty => {
+                    nothing = Value::nothing(*span);
+                    &nothing
+                }
+                _ => {
+                    return Err(ShellError::IrEvalError {
+                        msg: "Must collect to value before destructuring".into(),
+                        span: Some(*span),
+                    });
+                }
+            };
+            let mut matches = vec![];
+            pattern
+                .check(*span, value, &mut matches)
+                .map_err(PatternMismatch::into_shell_error)?;
+            // Convert and check every value before storing any, so a failure assigns nothing.
+            let mut bindings = Vec::with_capacity(matches.len());
+            for (var_id, value) in matches {
+                let variable_ty = &ctx.engine_state.get_var(var_id).ty;
+                // A string bound to a variable typed `glob` becomes a glob, as in `let g: glob`.
+                let value = match value {
+                    Value::String {
+                        val, internal_span, ..
+                    } if *variable_ty == Type::Glob => Value::glob(val, false, internal_span),
+                    value => value,
+                };
+                // Check the variable's type, as `store-variable` does.
+                let value = if nu_experimental::ENFORCE_RUNTIME_ANNOTATIONS.get() {
+                    check_assignment_type(value, variable_ty, *span)?
+                } else {
+                    value
+                };
+                bindings.push((var_id, value));
+            }
+            for (var_id, value) in bindings {
+                ctx.stack.add_var(var_id, value);
+            }
+            Ok(Continue)
         }
         Instruction::CheckMatchGuard { src } => {
             if matches!(

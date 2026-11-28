@@ -1,6 +1,6 @@
 use crate::{
     BlockId, DeclId, Filesize, RegId, ShellError, Span, Value, VarId,
-    ast::{CellPath, Expression, Operator, Pattern, RangeInclusion},
+    ast::{CellPath, Operator, Pattern, RangeInclusion},
     engine::{EngineState, ScopeBindings},
 };
 use serde::{Deserialize, Serialize};
@@ -8,9 +8,11 @@ use std::{fmt, sync::Arc};
 
 mod call;
 mod display;
+mod parser_info;
 
 pub use call::*;
 pub use display::{FmtInstruction, FmtIrBlock};
+pub use parser_info::ParserInfo;
 
 /// Instruction-index range where a nested block's local command/module bindings apply.
 ///
@@ -181,7 +183,7 @@ pub enum Instruction {
     /// Add parser info to the next (internal) call.
     PushParserInfo {
         name: DataSlice,
-        info: Box<Expression>,
+        info: Box<ParserInfo>,
     },
     /// Set the redirection for stdout for the next call (only).
     ///
@@ -276,6 +278,10 @@ pub enum Instruction {
         src: RegId,
         index: usize,
     },
+    /// Bind the variables of a destructuring pattern, as in `let {$name} = $record`, from the
+    /// collected value in `src`. Raises [`PatternMismatch`](crate::ShellError::PatternMismatch)
+    /// if the value doesn't fit. The value is preserved in `src`.
+    Destructure { pattern: Box<Pattern>, src: RegId },
     /// Check that a match guard is a boolean, throwing
     /// [`MatchGuardNotBool`](crate::ShellError::MatchGuardNotBool) if it isn't. Preserves `src`.
     CheckMatchGuard { src: RegId },
@@ -304,6 +310,8 @@ pub enum Instruction {
     /// Mark the `finally` handler on top of the handler stack as running, on the way into its
     /// block from the `try`/`catch` fall-through path. The unwinder does this itself when it
     /// enters a `finally` block, so `index` of `finally` points just past this instruction.
+    /// A pending interrupt is raised before the marker is set, so it unwinds through the
+    /// `finally` block instead of interrupting it.
     BeginFinally,
     /// Leave a `finally` block: pops its running marker and, if the block was entered by
     /// unwinding (an error, `return`, `exit`, `break`, or `continue`), resumes that unwinding.
@@ -315,7 +323,8 @@ pub enum Instruction {
     /// Unlike `return`, this runs pending `finally` handlers first (collecting the value in that
     /// case, like the `try-collect` on the fall-through path), and flags the result as an early
     /// return. Custom command and closure calls clear that flag; only top-level file evaluation
-    /// reads it, to skip `main`.
+    /// reads it, to skip `main`. A pending interrupt is raised instead of returning, as `return`
+    /// does, so it unwinds through those `finally` handlers as an error.
     ReturnEarly { src: RegId },
     /// Return from the block with the value in the register
     Return { src: RegId },
@@ -387,6 +396,7 @@ impl Instruction {
             Instruction::BranchIf { .. } => None,
             Instruction::BranchIfEmpty { .. } => None,
             Instruction::Match { .. } => None,
+            Instruction::Destructure { .. } => None,
             Instruction::CheckMatchGuard { .. } => None,
             Instruction::Iterate { dst, .. } => Some(dst),
             Instruction::OnError { .. } => None,
@@ -453,7 +463,12 @@ impl Instruction {
         Ok(())
     }
 
-    /// Check for an interrupt before certain instructions
+    /// Check for an interrupt before certain instructions.
+    ///
+    /// `begin-finally` and `return-early` check before control enters a `finally` block, so an
+    /// interrupt that arrived while the `try` body ran (for example, an external command that
+    /// handles SIGINT itself and exits 0) unwinds into that `finally` handler as an error: the
+    /// `finally` block runs, and the interrupt is raised after it.
     pub fn check_interrupt(
         &self,
         engine_state: &EngineState,
@@ -462,6 +477,8 @@ impl Instruction {
         match self {
             Instruction::Jump { .. }
             | Instruction::UnwindJump { .. }
+            | Instruction::BeginFinally
+            | Instruction::ReturnEarly { .. }
             | Instruction::Return { .. } => engine_state.signals().check(span),
             _ => Ok(()),
         }
